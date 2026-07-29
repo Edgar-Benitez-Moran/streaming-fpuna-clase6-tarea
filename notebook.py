@@ -13,9 +13,25 @@ def _():
     import apache_beam as beam
     import marimo as mo
     from apache_beam.coders import StrUtf8Coder
-    from apache_beam.transforms.userstate import SetStateSpec
+    from apache_beam.transforms.timeutil import TimeDomain
+    from apache_beam.transforms.userstate import (
+        SetStateSpec,
+        TimerSpec,
+        on_timer,
+    )
 
-    return Any, Iterable, SetStateSpec, StrUtf8Coder, beam, datetime, mo
+    return (
+        Any,
+        Iterable,
+        SetStateSpec,
+        StrUtf8Coder,
+        TimeDomain,
+        TimerSpec,
+        beam,
+        datetime,
+        mo,
+        on_timer,
+    )
 
 
 @app.cell
@@ -105,9 +121,14 @@ def _(Any, Iterable):
 
         Retornar `(totals, audit)`.
 
-        Cada fila de `totals` debe contener merchant_id, window_start,
-        window_end y total. Cada fila de `audit` debe explicar si el evento fue
-        aceptado, duplicado, demasiado tardío o inválido para la métrica.
+        Cada fila de `totals` debe contener `merchant_id`, `window_start`,
+        `window_end` y `total`; los límites de ventana se expresan como strings
+        ISO-8601.
+
+        Cada fila de `audit` debe contener `event_id`, `merchant_id`,
+        `delay_seconds`, `duplicate`, `too_late`, `accepted`, `revision` y
+        `reason`. `revision` es verdadero cuando un evento aceptado llega
+        después del cierre de su ventana.
         """
         raise NotImplementedError("TODO 3: implementar summarize_payments")
 
@@ -127,7 +148,9 @@ def _(mo):
     - la ventana depende de `event_time`;
     - un duplicado no cambia el total;
     - el atraso se calcula con `arrival_time - event_time`;
-    - la auditoría conserva la razón de cada decisión.
+    - la auditoría conserva la razón de cada decisión;
+    - un late aceptado tiene `accepted=True` y `revision=True`;
+    - un evento fuera de tolerancia tiene `reason="too_late"`.
 
     Para la configuración por defecto, documentá cuántos eventos entran,
     cuántos se aceptan y cuántos totales se producen.
@@ -136,7 +159,7 @@ def _(mo):
 
 
 @app.cell
-def _(Any):
+def _(Any, beam, parse_utc):
     def build_windowed_totals_pipeline(
         pipeline: Any,
         events: list[dict[str, Any]],
@@ -156,20 +179,38 @@ def _(Any):
 
 
 @app.cell
-def _(Any, SetStateSpec, StrUtf8Coder, beam):
+def _(
+    Any,
+    SetStateSpec,
+    StrUtf8Coder,
+    TimeDomain,
+    TimerSpec,
+    beam,
+    on_timer,
+):
     class DeduplicatePayments(beam.DoFn):
         """Eliminar event_id repetidos dentro de cada clave de comercio."""
 
         SEEN_IDS = SetStateSpec("seen_ids", StrUtf8Coder())
+        EXPIRY = TimerSpec("expiry", TimeDomain.WATERMARK)
 
         def process(
             self,
             element: tuple[str, dict[str, Any]],
             seen_ids=beam.DoFn.StateParam(SEEN_IDS),
+            window=beam.DoFn.WindowParam,
+            expiry=beam.DoFn.TimerParam(EXPIRY),
         ):
-            """Emitir solo la primera aparición de cada event_id."""
+            """Emitir el elemento completo solo en su primera aparición."""
             raise NotImplementedError(
                 "TODO 5: implementar DeduplicatePayments.process"
+            )
+
+        @on_timer(EXPIRY)
+        def expire(self, seen_ids=beam.DoFn.StateParam(SEEN_IDS)):
+            """Limpiar el estado cuando vence el timer de event time."""
+            raise NotImplementedError(
+                "TODO 5b: implementar DeduplicatePayments.expire"
             )
 
     return
@@ -247,17 +288,37 @@ def _(mo):
 
     Completá `make_idempotency_key` y `simulate_sink_retries`.
 
-    Compará explícitamente:
+    En este ejercicio los sinks **no son servicios externos reales**. Son
+    estructuras Python en memoria que representan dos contratos de escritura:
 
-    - `POST` append-only: un intento produce una fila;
-    - `UPSERT`: la misma clave lógica reemplaza el valor anterior.
+    | Modo simulado | Estructura interna | Operación |
+    |---|---|---|
+    | `POST` append-only | `list` | `append(row)` en cada intento |
+    | `UPSERT` idempotente | `dict` | `sink[idempotency_key] = row` |
 
-    Para cuatro resultados y dos intentos, justificá por qué existen ocho
-    intentos pero solo cuatro filas materializadas con UPSERT.
+    `simulate_sink_retries` siempre retorna dos **listas**:
+
+    1. `materialized`: estado final visible del sink;
+    2. `audit`: todos los intentos realizados.
+
+    En modo append-only, `materialized` contiene una fila por intento. En modo
+    idempotente, se usa internamente un diccionario y al final se retornan
+    `list(upsert_sink.values())`.
+
+    Para cuatro resultados y dos intentos existen ocho filas de auditoría. El
+    modo append-only materializa ocho filas; el UPSERT materializa cuatro
+    porque el segundo intento reemplaza la misma clave lógica.
 
     ## 5. Pruebas obligatorias
 
-    Incluí evidencia automatizada para:
+    El proyecto ya incluye los tests. Ejecutalos con:
+
+    ```bash
+    uv run pytest
+    ```
+
+    Al comienzo deben fallar con `NotImplementedError`. Implementá las
+    funciones hasta que estas garantías queden verdes:
 
     - [ ] un duplicado no modifica el total;
     - [ ] claves distintas no comparten estado;
@@ -278,7 +339,7 @@ def _(mo):
     Publicá un repositorio propio con:
 
     1. este notebook completamente implementado;
-    2. pruebas reproducibles;
+    2. la suite de pruebas provista ejecutada y completamente verde;
     3. README con instrucciones Docker o `uv`;
     4. explicación breve de ventanas, triggers, estado, timer e
        idempotencia;
