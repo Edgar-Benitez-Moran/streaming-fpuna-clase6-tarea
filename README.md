@@ -72,7 +72,8 @@ Entregar un repositorio propio que incluya:
 
 - `notebook.py` con todas las funciones implementadas;
 - evidencia de ejecución del pipeline;
-- pruebas para desorden, duplicados, atraso y reintentos;
+- todas las pruebas provistas para desorden, duplicados, atraso y reintentos
+  ejecutadas y aprobadas;
 - un README breve con decisiones y trade-offs;
 - instrucciones reproducibles con Docker o `uv`.
 

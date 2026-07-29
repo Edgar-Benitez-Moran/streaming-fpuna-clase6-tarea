@@ -339,7 +339,7 @@ def _(mo):
     Publicá un repositorio propio con:
 
     1. este notebook completamente implementado;
-    2. pruebas reproducibles;
+    2. la suite de pruebas provista ejecutada y completamente verde;
     3. README con instrucciones Docker o `uv`;
     4. explicación breve de ventanas, triggers, estado, timer e
        idempotencia;
