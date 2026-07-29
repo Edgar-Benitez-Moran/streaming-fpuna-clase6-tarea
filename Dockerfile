@@ -9,10 +9,11 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 WORKDIR /app
 
 COPY pyproject.toml uv.lock README.md ./
-RUN uv sync --frozen --no-dev
+RUN uv sync --frozen
 
 COPY notebook.py ./
 COPY data ./data
+COPY tests ./tests
 
 RUN useradd --create-home --uid 10001 student \
     && chown -R student:student /app

@@ -40,15 +40,31 @@ uv sync --frozen
 uv run marimo edit notebook.py
 ```
 
-## Validar la estructura
+## Trabajar con tests
+
+```bash
+uv run pytest
+```
+
+Los tests se entregan deliberadamente en rojo: las funciones del notebook
+lanzan `NotImplementedError`. El objetivo es implementar las celdas hasta
+obtener una suite completamente verde.
+
+Los tests cargan las funciones directamente desde `notebook.py`; no hay que
+copiar la solución a otro módulo.
+
+Para validar además estilo y estructura:
 
 ```bash
 uv run ruff check notebook.py
 uv run marimo check --strict notebook.py
 ```
 
-Estas comprobaciones validan sintaxis y estructura, pero no prueban la
-corrección de la solución.
+Dentro del contenedor también se puede ejecutar:
+
+```bash
+docker compose exec notebook uv run pytest
+```
 
 ## Entrega
 
