@@ -9,3 +9,5 @@ output/
 dist/
 build/
 .DS_Store
+
+documentacion_local/
