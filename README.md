@@ -1,4 +1,5 @@
-# Tarea 3  -  Estado, duplicados e idempotencia con Apache Beam
+# Tarea 3   
+**Estado, duplicados e idempotencia con Apache Beam**
 
 Asignatura: **Streaming de datos y sus aplicaciones**
 
