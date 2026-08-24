@@ -1,7 +1,9 @@
 # Tarea 3 — Estado, duplicados e idempotencia con Apache Beam
 
-Asignatura **Streaming de datos y sus aplicaciones**
+Asignatura: **Streaming de datos y sus aplicaciones**
+
 Maestría en Análisis de Datos e Inteligencia Artificial
+
 Facultad Politécnica — Universidad Nacional de Asunción
 
 ## Objetivo
