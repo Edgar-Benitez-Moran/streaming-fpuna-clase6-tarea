@@ -73,9 +73,15 @@ def _(mo):
 def _(datetime):
     def parse_utc(raw_value: str) -> datetime:
         """Convertir un timestamp ISO-8601 terminado en Z a datetime UTC."""
-        raise NotImplementedError("TODO 1: implementar parse_utc")
+        if not raw_value.endswith("Z"):
+            raise ValueError("El timestamp debe terminar en 'Z' para representar UTC.")
 
-    return
+        try:
+            return datetime.fromisoformat(raw_value)
+        except ValueError as exc:
+            raise ValueError(f"Timestamp ISO-8601 inválido: {raw_value}") from exc
+
+    return (parse_utc,)
 
 
 @app.cell
@@ -103,13 +109,22 @@ def _(datetime):
         size_seconds: int = 60,
     ) -> tuple[datetime, datetime]:
         """Retornar los límites [inicio, fin) de la ventana fija."""
-        raise NotImplementedError("TODO 2: implementar assign_fixed_window")
+        if size_seconds <= 0:
+            raise ValueError("size_seconds debe ser mayor que cero.")
 
-    return
+        epoch_seconds = int(timestamp.timestamp())
+        start_seconds = (epoch_seconds // size_seconds) * size_seconds
+
+        start = datetime.fromtimestamp(start_seconds, tz=timestamp.tzinfo)
+        end = datetime.fromtimestamp(start_seconds + size_seconds, tz=timestamp.tzinfo)
+
+        return start, end
+
+    return (assign_fixed_window,)
 
 
 @app.cell
-def _(Any, Iterable):
+def _(Any, Iterable, assign_fixed_window, datetime, parse_utc):
     def summarize_payments(
         events: Iterable[dict[str, Any]],
         *,
@@ -130,7 +145,90 @@ def _(Any, Iterable):
         `reason`. `revision` es verdadero cuando un evento aceptado llega
         después del cierre de su ventana.
         """
-        raise NotImplementedError("TODO 3: implementar summarize_payments")
+        if allowed_lateness_seconds < 0:
+            raise ValueError("allowed_lateness_seconds no puede ser negativo.")
+
+        totals_by_window: dict[tuple[str, datetime, datetime], int] = {}
+        seen_by_merchant: dict[str, set[str]] = {}
+        audit: list[dict[str, Any]] = []
+
+        for event in events:
+            event_id = event["event_id"]
+            merchant_id = event["merchant_id"]
+
+            event_time = parse_utc(event["event_time"])
+            arrival_time = parse_utc(event["arrival_time"])
+
+            window_start, window_end = assign_fixed_window(
+                event_time,
+                window_seconds,
+            )
+
+            delay_seconds = int(
+                (arrival_time - event_time).total_seconds()
+            )
+
+            seen_ids = seen_by_merchant.setdefault(merchant_id, set())
+            duplicate = deduplicate and event_id in seen_ids
+
+            if deduplicate and not duplicate:
+                seen_ids.add(event_id)
+
+            too_late = delay_seconds > allowed_lateness_seconds
+            confirmed = event["status"] == "CONFIRMED"
+
+            accepted = confirmed and not duplicate and not too_late
+            revision = accepted and arrival_time >= window_end
+
+            if duplicate:
+                reason = "duplicate"
+            elif too_late:
+                reason = "too_late"
+            elif not confirmed:
+                reason = "not_confirmed"
+            else:
+                reason = "accepted"
+
+            audit.append(
+                {
+                    "event_id": event_id,
+                    "merchant_id": merchant_id,
+                    "delay_seconds": delay_seconds,
+                    "duplicate": duplicate,
+                    "too_late": too_late,
+                    "accepted": accepted,
+                    "revision": revision,
+                    "reason": reason,
+                }
+            )
+
+            if accepted:
+                key = (merchant_id, window_start, window_end)
+                totals_by_window[key] = (
+                    totals_by_window.get(key, 0) + event["amount"]
+                )
+
+        totals = [
+            {
+                "merchant_id": merchant_id,
+                "window_start": window_start.isoformat(),
+                "window_end": window_end.isoformat(),
+                "total": total,
+            }
+            for (
+                merchant_id,
+                window_start,
+                window_end,
+            ), total in sorted(
+                totals_by_window.items(),
+                key=lambda item: (
+                    item[0][0],
+                    item[0][1],
+                ),
+            )
+        ]
+
+        return totals, audit
 
     return
 
@@ -171,28 +269,70 @@ def _(Any, beam, parse_utc):
         Usar Create, TimestampedValue, Filter, WindowInto, una clave por
         comercio, CombinePerKey y metadatos de WindowParam.
         """
-        raise NotImplementedError(
-            "TODO 4: implementar build_windowed_totals_pipeline"
+
+        class FormatTotal(beam.DoFn):
+            def process(
+                self,
+                element,
+                window=beam.DoFn.WindowParam,
+            ):
+                merchant_id, total = element
+
+                yield {
+                    "merchant_id": merchant_id,
+                    "window_start": window.start.to_utc_datetime(
+                        has_tz=True
+                    ).isoformat(),
+                    "window_end": window.end.to_utc_datetime(
+                        has_tz=True
+                    ).isoformat(),
+                    "total": total,
+                }
+
+        return (
+            pipeline
+            | "Create payments" >> beam.Create(events)
+            | "Use event time"
+            >> beam.Map(
+                lambda event: beam.window.TimestampedValue(
+                    event,
+                    parse_utc(event["event_time"]).timestamp(),
+                )
+            )
+            | "Only confirmed"
+            >> beam.Filter(
+                lambda event: event["status"] == "CONFIRMED"
+            )
+            | "Window payments"
+            >> beam.WindowInto(
+                beam.window.FixedWindows(window_seconds)
+            )
+            | "Key amount by merchant"
+            >> beam.Map(
+                lambda event: (
+                    event["merchant_id"],
+                    event["amount"],
+                )
+            )
+            | "Sum per merchant and window"
+            >> beam.CombinePerKey(sum)
+            | "Format window totals"
+            >> beam.ParDo(FormatTotal())
         )
 
     return
 
 
 @app.cell
-def _(
-    Any,
-    SetStateSpec,
-    StrUtf8Coder,
-    TimeDomain,
-    TimerSpec,
-    beam,
-    on_timer,
-):
+def _(Any, SetStateSpec, StrUtf8Coder, TimeDomain, TimerSpec, beam, on_timer):
     class DeduplicatePayments(beam.DoFn):
         """Eliminar event_id repetidos dentro de cada clave de comercio."""
 
         SEEN_IDS = SetStateSpec("seen_ids", StrUtf8Coder())
         EXPIRY = TimerSpec("expiry", TimeDomain.WATERMARK)
+
+        def __init__(self, allowed_lateness_seconds: int = 120):
+            self.allowed_lateness_seconds = allowed_lateness_seconds
 
         def process(
             self,
@@ -202,22 +342,27 @@ def _(
             expiry=beam.DoFn.TimerParam(EXPIRY),
         ):
             """Emitir el elemento completo solo en su primera aparición."""
-            raise NotImplementedError(
-                "TODO 5: implementar DeduplicatePayments.process"
-            )
+            merchant_id, event = element
+            event_id = event["event_id"]
+
+            if event_id in set(seen_ids.read()):
+                return
+
+            seen_ids.add(event_id)
+            expiry.set(window.end + self.allowed_lateness_seconds)
+
+            yield merchant_id, event
 
         @on_timer(EXPIRY)
         def expire(self, seen_ids=beam.DoFn.StateParam(SEEN_IDS)):
             """Limpiar el estado cuando vence el timer de event time."""
-            raise NotImplementedError(
-                "TODO 5b: implementar DeduplicatePayments.expire"
-            )
+            seen_ids.clear()
 
     return
 
 
 @app.cell
-def _(Any):
+def _(Any, beam):
     def build_trigger_policy(
         *,
         window_seconds: int = 60,
@@ -228,7 +373,17 @@ def _(Any):
         Configurar un pane on-time por watermark, una estimación early por
         processing time, revisiones late y modo ACCUMULATING.
         """
-        raise NotImplementedError("TODO 6: implementar build_trigger_policy")
+        from apache_beam.transforms import trigger
+
+        return beam.WindowInto(
+            beam.window.FixedWindows(window_seconds),
+            trigger=trigger.AfterWatermark(
+                early=trigger.AfterProcessingTime(10),
+                late=trigger.AfterCount(1),
+            ),
+            allowed_lateness=allowed_lateness_seconds,
+            accumulation_mode=trigger.AccumulationMode.ACCUMULATING,
+        )
 
     return
 
@@ -263,7 +418,8 @@ def _(mo):
 def _(Any):
     def make_idempotency_key(result: dict[str, Any]) -> str:
         """Construir merchant_id|window_start para un resultado lógico."""
-        raise NotImplementedError("TODO 7: implementar make_idempotency_key")
+        return f"{result['merchant_id']}|{result['window_start']}"
+
 
     def simulate_sink_retries(
         results: list[dict[str, Any]],
@@ -276,7 +432,41 @@ def _(Any):
         En modo idempotente, múltiples intentos del mismo resultado deben dejar
         una sola fila materializada. En modo append, cada intento agrega una.
         """
-        raise NotImplementedError("TODO 8: implementar simulate_sink_retries")
+        append_sink: list[dict[str, Any]] = []
+        upsert_sink: dict[str, dict[str, Any]] = {}
+        audit: list[dict[str, Any]] = []
+
+        for result in results:
+            idempotency_key = make_idempotency_key(result)
+
+            for attempt in range(1, attempts + 1):
+                row = {
+                    **result,
+                    "idempotency_key": idempotency_key,
+                }
+
+                if idempotent:
+                    upsert_sink[idempotency_key] = row
+                    operation = "UPSERT"
+                else:
+                    append_sink.append(row.copy())
+                    operation = "POST"
+
+                audit.append(
+                    {
+                        "idempotency_key": idempotency_key,
+                        "attempt": attempt,
+                        "operation": operation,
+                    }
+                )
+
+        materialized = (
+            list(upsert_sink.values())
+            if idempotent
+            else append_sink
+        )
+
+        return materialized, audit
 
     return
 
