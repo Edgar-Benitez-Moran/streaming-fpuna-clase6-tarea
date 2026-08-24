@@ -230,7 +230,7 @@ def _(Any, Iterable, assign_fixed_window, datetime, parse_utc):
 
         return totals, audit
 
-    return
+    return (summarize_payments,)
 
 
 @app.cell
@@ -468,7 +468,7 @@ def _(Any):
 
         return materialized, audit
 
-    return
+    return (simulate_sink_retries,)
 
 
 @app.cell
@@ -547,6 +547,54 @@ def _(mo):
 
     Se evalúa corrección conceptual y evidencia, no complejidad innecesaria.
     """)
+    return
+
+
+@app.cell
+def _(mo, simulate_sink_retries, summarize_payments):
+    import json
+    from pathlib import Path
+
+    events_evidence = [
+        json.loads(line)
+        for line in Path("data/payments.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+        if line.strip()
+    ]
+
+    totals_evidence, audit_evidence = summarize_payments(events_evidence)
+
+    accepted_evidence = sum(row["accepted"] for row in audit_evidence)
+    duplicates_evidence = sum(row["duplicate"] for row in audit_evidence)
+    too_late_evidence = sum(row["too_late"] for row in audit_evidence)
+    revisions_evidence = sum(row["revision"] for row in audit_evidence)
+
+    materialized_evidence, sink_audit_evidence = simulate_sink_retries(
+        totals_evidence,
+        attempts=2,
+        idempotent=True,
+    )
+
+    mo.vstack(
+        [
+            mo.md(
+                f"""
+    ## Evidencia de ejecución — configuración por defecto
+
+    - **Eventos de entrada:** {len(events_evidence)}
+    - **Eventos aceptados:** {accepted_evidence}
+    - **Duplicados detectados:** {duplicates_evidence}
+    - **Eventos demasiado tardíos:** {too_late_evidence}
+    - **Revisiones tardías aceptadas:** {revisions_evidence}
+    - **Totales producidos:** {len(totals_evidence)}
+    - **Entidades finales tras 2 intentos UPSERT:** {len(materialized_evidence)}
+    """
+            ),
+            mo.md("### Totales confirmados por comercio y ventana"),
+            mo.ui.table(totals_evidence),
+        ]
+    )
     return
 
 
