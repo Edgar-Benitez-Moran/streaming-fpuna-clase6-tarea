@@ -1,4 +1,4 @@
-# Tarea 3  -  Estado, duplicados e idempotencia con Apache Beam
+# Tarea 3 — Estado, duplicados e idempotencia con Apache Beam
 
 Asignatura: **Streaming de datos y sus aplicaciones**
 
@@ -94,7 +94,7 @@ La prueba utiliza `TestStream` para reproducir explícitamente:
 4. aceptación del evento dentro de la lateness permitida;
 5. generación de un pane `LATE` acumulativo.
 
-Resultado observado:
+Resultado observado al ejecutar esta prueba de forma aislada:
 
 ```text
 1 passed
@@ -118,10 +118,10 @@ docker compose up --build -d notebook
 http://localhost:2718
 ```
 
-### 3. Ejecutar las pruebas
+### 3. Ejecutar todas las pruebas del repositorio
 
 ```bash
-docker compose exec notebook uv run pytest
+docker compose exec notebook uv run pytest -q
 ```
 
 ### 4. Ejecutar la prueba temporal adicional
@@ -136,7 +136,7 @@ docker compose exec notebook uv run pytest tests/test_temporal.py -v
 docker compose exec notebook uv run ruff check notebook.py tests/test_temporal.py
 ```
 
-Resultado esperado:
+Resultado observado:
 
 ```text
 All checks passed!
@@ -167,7 +167,11 @@ La implementación satisface funcionalmente los contratos evaluados de:
 * reintentos idempotentes;
 * comportamiento append-only.
 
-La suite oficial actualmente produce:
+## Estado actual de la validación
+
+### Suite oficial provista por la cátedra
+
+La suite oficial provista por la cátedra produce:
 
 ```text
 12 passed, 1 failed
@@ -176,18 +180,18 @@ La suite oficial actualmente produce:
 El único fallo ocurre en:
 
 ```text
-test_trigger_policy_has_lateness_and_accumulating_panes
+tests/test_assignment.py::test_trigger_policy_has_lateness_and_accumulating_panes
 ```
 
-y no proviene de la configuración de la política temporal.
+La falla no se origina en los valores configurados de la política temporal.
 
-El proyecto utiliza Apache Beam `2.74.0`. En esta versión, `FixedWindows(60)` representa el tamaño mediante:
+El proyecto utiliza Apache Beam `2.74.0`. En esta versión, `FixedWindows(60)` representa el tamaño de ventana mediante:
 
 ```text
 apache_beam.utils.timestamp.Duration
 ```
 
-La ejecución directa confirmó:
+La verificación directa confirmó:
 
 ```text
 float(size) = 60.0
@@ -205,9 +209,37 @@ El test proporcionado intenta acceder a:
 policy.windowing.windowfn.size.seconds
 ```
 
-pero `Duration` no expone ese atributo en la versión fijada por el proyecto.
+pero `Duration` no expone el atributo `.seconds` en Apache Beam `2.74.0`.
 
-No se modificaron las pruebas oficiales ni se introdujo código artificial para fabricar dicho atributo. La política implementada mantiene la semántica requerida por la tarea.
+Por esta razón, la prueba produce:
+
+```text
+AttributeError: 'Duration' object has no attribute 'seconds'
+```
+
+No se modificaron las pruebas oficiales ni se introdujo código artificial para fabricar dicho atributo. La implementación mantiene la semántica temporal requerida: ventana de 60 segundos, lateness permitida de 120 segundos, `AfterWatermark` y panes acumulativos.
+
+### Suite total del repositorio
+
+Además de la suite oficial, este repositorio incorpora la prueba auxiliar:
+
+```text
+tests/test_temporal.py
+```
+
+Por lo tanto, la ejecución completa actual del repositorio produce:
+
+```text
+13 passed, 1 failed
+```
+
+La única falla sigue correspondiendo al mismo test oficial:
+
+```text
+test_trigger_policy_has_lateness_and_accumulating_panes
+```
+
+La prueba temporal adicional finaliza correctamente.
 
 ## Validaciones realizadas
 
@@ -231,13 +263,13 @@ marimo check --strict                      PASS
 
 ## Evidencias
 
-Las evidencias finales de ejecución se almacenarán en:
+Las evidencias finales de ejecución se almacenan en:
 
 ```text
 evidencias/
 ```
 
-e incluirán:
+e incluyen:
 
 ```text
 01_pipeline_marimo.png
